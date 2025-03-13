@@ -43,6 +43,10 @@ public:
 
     double lidarOdomTime = -1;
     deque<nav_msgs::msg::Odometry> imuOdomQueue;
+    bool odom_initialized = false;
+    Eigen::Affine3f odom_to_base_link;
+    bool initial_offset_calculated = false; // 초기 오프셋 계산 여부
+    float z_offset = 0.0; // z축 초기 오프셋 값    
 
     TransformFusion(const rclcpp::NodeOptions & options) : ParamServer("liorf_localization_transformFusion", options)
     {
@@ -93,22 +97,28 @@ public:
 
         lidarOdomAffine = odom2affine(*odomMsg);
 
+        // 초기 높이 오프셋 계산 (한 번만 수행)
+        if (!initial_offset_calculated) {
+            z_offset = lidarOdomAffine.translation().z(); // 초기 z축 값 저장
+            RCLCPP_INFO(get_logger(), "Initial Z Offset: %f", z_offset);
+            initial_offset_calculated = true;
+        }
+
+        // z축 보정
+        lidarOdomAffine.translation().z() -= z_offset;
+
         lidarOdomTime = ROS_TIME(odomMsg->header.stamp);
     }
 
     void imuOdometryHandler(const nav_msgs::msg::Odometry::SharedPtr odomMsg)
     {
-        // static tf
-        tf2::Quaternion quat_tf;
-        rclcpp::Time t(static_cast<uint32_t>(lidarOdomTime * 1e9));
-        tf2::TimePoint time_point = tf2_ros::fromRclcpp(t);
         std::lock_guard<std::mutex> lock(mtx);
 
         imuOdomQueue.push_back(*odomMsg);
 
-        // get latest odometry (at current IMU stamp)
         if (lidarOdomTime == -1)
             return;
+
         while (!imuOdomQueue.empty())
         {
             if (ROS_TIME(imuOdomQueue.front().header.stamp) <= lidarOdomTime)
@@ -121,60 +131,44 @@ public:
         Eigen::Affine3f imuOdomAffineBack = odom2affine(imuOdomQueue.back());
         Eigen::Affine3f imuOdomAffineIncre = imuOdomAffineFront.inverse() * imuOdomAffineBack;
         Eigen::Affine3f imuOdomAffineLast = lidarOdomAffine * imuOdomAffineIncre;
+
         float x, y, z, roll, pitch, yaw;
         pcl::getTranslationAndEulerAngles(imuOdomAffineLast, x, y, z, roll, pitch, yaw);
-        
-        // publish latest odometry
+
+        // 최신 odometry 데이터
         nav_msgs::msg::Odometry laserOdometry = imuOdomQueue.back();
         laserOdometry.pose.pose.position.x = x;
         laserOdometry.pose.pose.position.y = y;
         laserOdometry.pose.pose.position.z = z;
+        tf2::Quaternion quat_tf;
         quat_tf.setRPY(roll, pitch, yaw);
-        geometry_msgs::msg::Quaternion quat_msg;
-        tf2::convert(quat_tf, quat_msg);
-        laserOdometry.pose.pose.orientation = quat_msg;
+        laserOdometry.pose.pose.orientation = tf2::toMsg(quat_tf);
         pubImuOdometry->publish(laserOdometry);
 
-        // publish tf
-        tf2::Transform tCur(tf2::Quaternion(laserOdometry.pose.pose.orientation.x,
-                                            laserOdometry.pose.pose.orientation.y,
-                                            laserOdometry.pose.pose.orientation.z,
-                                            laserOdometry.pose.pose.orientation.w),
-                            tf2::Vector3(laserOdometry.pose.pose.position.x,
-                                        laserOdometry.pose.pose.position.y,
-                                        laserOdometry.pose.pose.position.z));
+        // tf 전송
+        rclcpp::Time stamp = odomMsg->header.stamp;
+        tf2::TimePoint time_point = tf2_ros::fromRclcpp(stamp);
+        tf2::Transform tCur(quat_tf, tf2::Vector3(x, y, z));
+        tf2::Stamped<tf2::Transform> stampedOdomToBase(tCur, time_point, "odom");
+        geometry_msgs::msg::TransformStamped trans;
+        tf2::convert(stampedOdomToBase, trans);
+        trans.child_frame_id = baselinkFrame;
+        tfOdom2BaseLink->sendTransform(trans);
 
-        if (lidarFrame != baselinkFrame)
-            tCur *= lidar2Baselink;
-            
-        // odom → base_link 변환 생성 및 전송
-        tf2::Stamped<tf2::Transform> temp_odom_to_base(tCur, time_point, odometryFrame);
-        geometry_msgs::msg::TransformStamped trans_odom_to_base_link;
-        tf2::convert(temp_odom_to_base, trans_odom_to_base_link);
-        trans_odom_to_base_link.child_frame_id = baselinkFrame;
-        tfOdom2BaseLink->sendTransform(trans_odom_to_base_link);
-
-        // publish IMU path
+        // 경로 추가
         static nav_msgs::msg::Path imuPath;
-        static double last_path_time = -1;
-        double imuTime = ROS_TIME(imuOdomQueue.back().header.stamp);
-        if (imuTime - last_path_time > 0.1)
-        {
-            last_path_time = imuTime;
-            geometry_msgs::msg::PoseStamped pose_stamped;
-            pose_stamped.header.stamp = imuOdomQueue.back().header.stamp;
-            pose_stamped.header.frame_id = odometryFrame;
-            pose_stamped.pose = laserOdometry.pose.pose;
-            imuPath.poses.push_back(pose_stamped);
-            while(!imuPath.poses.empty() && ROS_TIME(imuPath.poses.front().header.stamp) < lidarOdomTime - 1.0)
-                imuPath.poses.erase(imuPath.poses.begin());
-            if (pubImuPath->get_subscription_count() != 0)
-            {
-                imuPath.header.stamp = imuOdomQueue.back().header.stamp;
-                imuPath.header.frame_id = odometryFrame;
-                pubImuPath->publish(imuPath);
-            }
-        }
+        geometry_msgs::msg::PoseStamped pose_stamped;
+        pose_stamped.header.stamp = odomMsg->header.stamp;
+        pose_stamped.header.frame_id = odometryFrame;
+        pose_stamped.pose = laserOdometry.pose.pose;
+        imuPath.poses.push_back(pose_stamped);
+
+        while (!imuPath.poses.empty() && ROS_TIME(imuPath.poses.front().header.stamp) < lidarOdomTime - 1.0)
+            imuPath.poses.erase(imuPath.poses.begin());
+
+        imuPath.header.stamp = odomMsg->header.stamp;
+        imuPath.header.frame_id = odometryFrame;
+        pubImuPath->publish(imuPath);
     }
 };
 
@@ -515,13 +509,13 @@ public:
         odometry.header.frame_id = odometryFrame;
         odometry.child_frame_id = "odom_imu";
 
-        // transform imu pose to ldiar
+        // transform imu pose to lidar
         gtsam::Pose3 imuPose = gtsam::Pose3(currentState.quaternion(), currentState.position());
         gtsam::Pose3 lidarPose = imuPose.compose(imu2Lidar);
 
         odometry.pose.pose.position.x = lidarPose.translation().x();
         odometry.pose.pose.position.y = lidarPose.translation().y();
-        odometry.pose.pose.position.z = lidarPose.translation().z();
+        odometry.pose.pose.position.z = 0.0; // Z축 위치 사용
         odometry.pose.pose.orientation.x = lidarPose.rotation().toQuaternion().x();
         odometry.pose.pose.orientation.y = lidarPose.rotation().toQuaternion().y();
         odometry.pose.pose.orientation.z = lidarPose.rotation().toQuaternion().z();

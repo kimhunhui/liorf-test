@@ -44,7 +44,7 @@ public:
     double lidarOdomTime = -1;
     deque<nav_msgs::msg::Odometry> imuOdomQueue;
 
-    TransformFusion(const rclcpp::NodeOptions & options) : ParamServer("liorf_localization_transformFusion", options)
+    TransformFusion(const rclcpp::NodeOptions & options) : ParamServer("liorf_transformFusion", options)
     {
         tfBuffer = std::make_shared<tf2_ros::Buffer>(get_clock());
         tfListener = std::make_shared<tf2_ros::TransformListener>(*tfBuffer);
@@ -65,15 +65,14 @@ public:
             }
         }
 
-
-        subLaserOdometry = create_subscription<nav_msgs::msg::Odometry>("liorf_localization/mapping/odometry", QosPolicy(history_policy, reliability_policy), 
+        subLaserOdometry = create_subscription<nav_msgs::msg::Odometry>("liorf/mapping/odometry", QosPolicy(history_policy, reliability_policy), 
                     std::bind(&TransformFusion::lidarOdometryHandler, this, std::placeholders::_1));
 
         subImuOdometry = create_subscription<nav_msgs::msg::Odometry>(odomTopic+"_incremental", QosPolicy(history_policy, reliability_policy),
                     std::bind(&TransformFusion::imuOdometryHandler, this, std::placeholders::_1));
 
         pubImuOdometry = create_publisher<nav_msgs::msg::Odometry>(odomTopic, QosPolicy(history_policy, reliability_policy));
-        pubImuPath = create_publisher<nav_msgs::msg::Path>("liorf_localization/imu/path", QosPolicy(history_policy, reliability_policy));
+        pubImuPath = create_publisher<nav_msgs::msg::Path>("liorf/imu/path", QosPolicy(history_policy, reliability_policy));
     }
 
     Eigen::Affine3f odom2affine(nav_msgs::msg::Odometry odom)
@@ -100,8 +99,16 @@ public:
     {
         // static tf
         tf2::Quaternion quat_tf;
+        // quat_tf.setRPY(0, 0, 0);
+        // tf2::Transform map_to_odom = tf2::Transform(quat_tf, tf2::Vector3(0, 0, 0));
         rclcpp::Time t(static_cast<uint32_t>(lidarOdomTime * 1e9));
         tf2::TimePoint time_point = tf2_ros::fromRclcpp(t);
+        // tf2::Stamped<tf2::Transform> temp_map_to_odom(map_to_odom, time_point, mapFrame);
+        // geometry_msgs::msg::TransformStamped trans_map_to_odom;
+        // tf2::convert(temp_map_to_odom, trans_map_to_odom);
+        // trans_map_to_odom.child_frame_id = odometryFrame;
+        // tfMap2Odom->sendTransform(trans_map_to_odom);
+
         std::lock_guard<std::mutex> lock(mtx);
 
         imuOdomQueue.push_back(*odomMsg);
@@ -116,7 +123,6 @@ public:
             else
                 break;
         }
-
         Eigen::Affine3f imuOdomAffineFront = odom2affine(imuOdomQueue.front());
         Eigen::Affine3f imuOdomAffineBack = odom2affine(imuOdomQueue.back());
         Eigen::Affine3f imuOdomAffineIncre = imuOdomAffineFront.inverse() * imuOdomAffineBack;
@@ -136,18 +142,11 @@ public:
         pubImuOdometry->publish(laserOdometry);
 
         // publish tf
-        tf2::Transform tCur(tf2::Quaternion(laserOdometry.pose.pose.orientation.x,
-                                            laserOdometry.pose.pose.orientation.y,
-                                            laserOdometry.pose.pose.orientation.z,
-                                            laserOdometry.pose.pose.orientation.w),
-                            tf2::Vector3(laserOdometry.pose.pose.position.x,
-                                        laserOdometry.pose.pose.position.y,
-                                        laserOdometry.pose.pose.position.z));
-
-        if (lidarFrame != baselinkFrame)
+        tf2::Transform tCur(tf2::Quaternion(laserOdometry.pose.pose.orientation.x, laserOdometry.pose.pose.orientation.y, laserOdometry.pose.pose.orientation.z, laserOdometry.pose.pose.orientation.w), 
+                                tf2::Vector3(laserOdometry.pose.pose.position.x, laserOdometry.pose.pose.position.y, laserOdometry.pose.pose.position.z));
+        if(lidarFrame != baselinkFrame)
             tCur *= lidar2Baselink;
-            
-        // odom → base_link 변환 생성 및 전송
+
         tf2::Stamped<tf2::Transform> temp_odom_to_base(tCur, time_point, odometryFrame);
         geometry_msgs::msg::TransformStamped trans_odom_to_base_link;
         tf2::convert(temp_odom_to_base, trans_odom_to_base_link);
@@ -231,12 +230,12 @@ public:
     gtsam::Pose3 lidar2Imu = gtsam::Pose3(gtsam::Rot3(1, 0, 0, 0), gtsam::Point3(extTrans.x(), extTrans.y(), extTrans.z()));
 
     IMUPreintegration(const rclcpp::NodeOptions & options) :
-            ParamServer("liorf_localization_imu_preintegration", options)
+            ParamServer("liorf_imu_preintegration", options)
     {
         subImu = create_subscription<sensor_msgs::msg::Imu>(imuTopic, QosPolicy(history_policy, reliability_policy), 
                     std::bind(&IMUPreintegration::imuHandler, this, std::placeholders::_1));
 
-        subOdometry = create_subscription<nav_msgs::msg::Odometry>("liorf_localization/mapping/odometry_incremental", QosPolicy(history_policy, reliability_policy),
+        subOdometry = create_subscription<nav_msgs::msg::Odometry>("liorf/mapping/odometry_incremental", QosPolicy(history_policy, reliability_policy),
                     std::bind(&IMUPreintegration::odometryHandler, this, std::placeholders::_1));
 
         pubImuOdometry = create_publisher<nav_msgs::msg::Odometry>(odomTopic+"_incremental", QosPolicy(history_policy, reliability_policy));
@@ -299,12 +298,13 @@ public:
         bool degenerate = (int)odomMsg->pose.covariance[0] == 1 ? true : false;
         gtsam::Pose3 lidarPose = gtsam::Pose3(gtsam::Rot3::Quaternion(r_w, r_x, r_y, r_z), gtsam::Point3(p_x, p_y, p_z));
 
+
         // 0. initialize system
         if (systemInitialized == false)
         {
             resetOptimization();
 
-            // 기존 imuQueOpt 데이터 정리
+            // pop old IMU message
             while (!imuQueOpt.empty())
             {
                 if (ROS_TIME((&imuQueOpt.front())->header.stamp) < currentCorrectionTime - delta_t)
@@ -315,30 +315,30 @@ public:
                 else
                     break;
             }
-
-            // GPS 또는 LIDAR 데이터를 초기 위치로 설정
-            prevPose_ = lidarPose.compose(lidar2Imu); // LIDAR 데이터를 사용 (GPS를 원한다면 gpsPose를 사용)
+            // initial pose
+            prevPose_ = lidarPose.compose(lidar2Imu);
             gtsam::PriorFactor<gtsam::Pose3> priorPose(X(0), prevPose_, priorPoseNoise);
             graphFactors.add(priorPose);
-
-            // 초기 속도와 바이어스 설정
+            // initial velocity
             prevVel_ = gtsam::Vector3(0, 0, 0);
             gtsam::PriorFactor<gtsam::Vector3> priorVel(V(0), prevVel_, priorVelNoise);
             graphFactors.add(priorVel);
+            // initial bias
             prevBias_ = gtsam::imuBias::ConstantBias();
             gtsam::PriorFactor<gtsam::imuBias::ConstantBias> priorBias(B(0), prevBias_, priorBiasNoise);
             graphFactors.add(priorBias);
-
-            // 그래프 값 추가 및 최적화 수행
+            // add values
             graphValues.insert(X(0), prevPose_);
             graphValues.insert(V(0), prevVel_);
             graphValues.insert(B(0), prevBias_);
+            // optimize once
             optimizer.update(graphFactors, graphValues);
+            graphFactors.resize(0);
+            graphValues.clear();
 
-            // 통합 객체 초기화
             imuIntegratorImu_->resetIntegrationAndSetBias(prevBias_);
             imuIntegratorOpt_->resetIntegrationAndSetBias(prevBias_);
-
+            
             key = 1;
             systemInitialized = true;
             return;
@@ -374,6 +374,7 @@ public:
 
             key = 1;
         }
+
 
         // 1. integrate imu data and optimize
         while (!imuQueOpt.empty())
@@ -430,6 +431,7 @@ public:
             return;
         }
 
+
         // 2. after optiization, re-propagate imu odometry preintegration
         prevStateOdom = prevState_;
         prevBiasOdom  = prevBias_;
@@ -465,7 +467,7 @@ public:
     bool failureDetection(const gtsam::Vector3& velCur, const gtsam::imuBias::ConstantBias& biasCur)
     {
         Eigen::Vector3f vel(velCur.x(), velCur.y(), velCur.z());
-        if (vel.norm() > 10) // Adjusted threshold
+        if (vel.norm() > 30)
         {
             RCLCPP_WARN(get_logger(), "Large velocity, reset IMU-preintegration!");
             return true;
@@ -498,13 +500,9 @@ public:
         double dt = (lastImuT_imu < 0) ? (1.0 / imuRate) : (imuTime - lastImuT_imu);
         lastImuT_imu = imuTime;
 
-        // IMU 데이터 필터링 적용
-        Eigen::Vector3f linear_acceleration = filterIMUData(Eigen::Vector3f(thisImu.linear_acceleration.x, thisImu.linear_acceleration.y, thisImu.linear_acceleration.z));
-        Eigen::Vector3f angular_velocity = filterIMUData(Eigen::Vector3f(thisImu.angular_velocity.x, thisImu.angular_velocity.y, thisImu.angular_velocity.z));
-
         // integrate this single imu message
-        imuIntegratorImu_->integrateMeasurement(gtsam::Vector3(linear_acceleration.x(), linear_acceleration.y(), linear_acceleration.z()),
-                                                gtsam::Vector3(angular_velocity.x(), angular_velocity.y(), angular_velocity.z()), dt);
+        imuIntegratorImu_->integrateMeasurement(gtsam::Vector3(thisImu.linear_acceleration.x, thisImu.linear_acceleration.y, thisImu.linear_acceleration.z),
+                                                gtsam::Vector3(thisImu.angular_velocity.x,    thisImu.angular_velocity.y,    thisImu.angular_velocity.z), dt);
 
         // predict odometry
         gtsam::NavState currentState = imuIntegratorImu_->predict(prevStateOdom, prevBiasOdom);
@@ -530,25 +528,16 @@ public:
         odometry.twist.twist.linear.x = currentState.velocity().x();
         odometry.twist.twist.linear.y = currentState.velocity().y();
         odometry.twist.twist.linear.z = currentState.velocity().z();
-        odometry.twist.twist.angular.x = angular_velocity.x() + prevBiasOdom.gyroscope().x();
-        odometry.twist.twist.angular.y = angular_velocity.y() + prevBiasOdom.gyroscope().y();
-        odometry.twist.twist.angular.z = angular_velocity.z() + prevBiasOdom.gyroscope().z();
+        odometry.twist.twist.angular.x = thisImu.angular_velocity.x + prevBiasOdom.gyroscope().x();
+        odometry.twist.twist.angular.y = thisImu.angular_velocity.y + prevBiasOdom.gyroscope().y();
+        odometry.twist.twist.angular.z = thisImu.angular_velocity.z + prevBiasOdom.gyroscope().z();
         pubImuOdometry->publish(odometry);
-    }
-
-    // 필터 함수 정의 추가
-    Eigen::Vector3f filterIMUData(const Eigen::Vector3f& data) {
-        static Eigen::Vector3f prevData = data;
-        float alpha = 0.8; // 필터 계수
-        Eigen::Vector3f filteredData = alpha * prevData + (1 - alpha) * data;
-        prevData = filteredData;
-        return filteredData;
     }
 };
 
 
 int main(int argc, char** argv)
-{
+{   
     rclcpp::init(argc, argv);
 
     rclcpp::NodeOptions options;
@@ -567,4 +556,3 @@ int main(int argc, char** argv)
     rclcpp::shutdown();
     return 0;
 }
-

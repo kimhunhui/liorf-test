@@ -136,18 +136,11 @@ public:
         pubImuOdometry->publish(laserOdometry);
 
         // publish tf
-        tf2::Transform tCur(tf2::Quaternion(laserOdometry.pose.pose.orientation.x,
-                                            laserOdometry.pose.pose.orientation.y,
-                                            laserOdometry.pose.pose.orientation.z,
-                                            laserOdometry.pose.pose.orientation.w),
-                            tf2::Vector3(laserOdometry.pose.pose.position.x,
-                                        laserOdometry.pose.pose.position.y,
-                                        laserOdometry.pose.pose.position.z));
-
-        if (lidarFrame != baselinkFrame)
+        tf2::Transform tCur(tf2::Quaternion(laserOdometry.pose.pose.orientation.x, laserOdometry.pose.pose.orientation.y, laserOdometry.pose.pose.orientation.z, laserOdometry.pose.pose.orientation.w), 
+                                tf2::Vector3(laserOdometry.pose.pose.position.x, laserOdometry.pose.pose.position.y, laserOdometry.pose.pose.position.z));
+        if(lidarFrame != baselinkFrame)
             tCur *= lidar2Baselink;
-            
-        // odom → base_link 변환 생성 및 전송
+
         tf2::Stamped<tf2::Transform> temp_odom_to_base(tCur, time_point, odometryFrame);
         geometry_msgs::msg::TransformStamped trans_odom_to_base_link;
         tf2::convert(temp_odom_to_base, trans_odom_to_base_link);
@@ -304,7 +297,7 @@ public:
         {
             resetOptimization();
 
-            // 기존 imuQueOpt 데이터 정리
+            // pop old IMU message
             while (!imuQueOpt.empty())
             {
                 if (ROS_TIME((&imuQueOpt.front())->header.stamp) < currentCorrectionTime - delta_t)
@@ -315,35 +308,34 @@ public:
                 else
                     break;
             }
-
-            // GPS 또는 LIDAR 데이터를 초기 위치로 설정
-            prevPose_ = lidarPose.compose(lidar2Imu); // LIDAR 데이터를 사용 (GPS를 원한다면 gpsPose를 사용)
+            // initial pose
+            prevPose_ = lidarPose.compose(lidar2Imu);
             gtsam::PriorFactor<gtsam::Pose3> priorPose(X(0), prevPose_, priorPoseNoise);
             graphFactors.add(priorPose);
-
-            // 초기 속도와 바이어스 설정
+            // initial velocity
             prevVel_ = gtsam::Vector3(0, 0, 0);
             gtsam::PriorFactor<gtsam::Vector3> priorVel(V(0), prevVel_, priorVelNoise);
             graphFactors.add(priorVel);
+            // initial bias
             prevBias_ = gtsam::imuBias::ConstantBias();
             gtsam::PriorFactor<gtsam::imuBias::ConstantBias> priorBias(B(0), prevBias_, priorBiasNoise);
             graphFactors.add(priorBias);
-
-            // 그래프 값 추가 및 최적화 수행
+            // add values
             graphValues.insert(X(0), prevPose_);
             graphValues.insert(V(0), prevVel_);
             graphValues.insert(B(0), prevBias_);
+            // optimize once
             optimizer.update(graphFactors, graphValues);
+            graphFactors.resize(0);
+            graphValues.clear();
 
-            // 통합 객체 초기화
             imuIntegratorImu_->resetIntegrationAndSetBias(prevBias_);
             imuIntegratorOpt_->resetIntegrationAndSetBias(prevBias_);
-
+            
             key = 1;
             systemInitialized = true;
             return;
         }
-
 
         // reset graph for speed
         if (key == 100)

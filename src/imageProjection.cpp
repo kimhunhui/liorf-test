@@ -1,6 +1,38 @@
 #include "utility.h"
 #include "liorf/msg/cloud_info.hpp"
+#include <mutex>
+#include <deque>
+#include <sensor_msgs/msg/point_cloud2.hpp>
+#include <sensor_msgs/msg/imu.hpp>
+#include <nav_msgs/msg/odometry.hpp>
+#include <pcl/point_cloud.h>
+#include <pcl/point_types.h>
+#include <pcl/conversions.h>
+#include <pcl_ros/transforms.hpp>  // 수정된 부분
+#include <pcl/registration/transformation_estimation_svd.h>
+#include <pcl/common/transforms.h>
+#include <pcl/common/eigen.h>
+#include <pcl/console/print.h>
+#include <pcl/console/time.h>
+#include <pcl_conversions/pcl_conversions.h>
+#include <rclcpp/rclcpp.hpp>
+#include <std_msgs/msg/header.hpp>
+#include <tf2_eigen/tf2_eigen.hpp>  // 수정된 부분
+#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>  // 수정된 부분
+
 // <!-- liorf_localization_yjz_lucky_boy -->
+struct LivoxPointXYZIRT
+{
+    PCL_ADD_POINT4D
+    PCL_ADD_INTENSITY;
+    float time;
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+} EIGEN_ALIGN16;
+POINT_CLOUD_REGISTER_POINT_STRUCT(LivoxPointXYZIRT,
+    (float, x, x) (float, y, y) (float, z, z) (float, intensity, intensity)
+    (float, time, time)
+)
+
 struct VelodynePointXYZIRT
 {
     PCL_ADD_POINT4D
@@ -217,7 +249,7 @@ public:
         // convert cloud
         currentCloudMsg = std::move(cloudQueue.front());
         cloudQueue.pop_front();
-        if (sensor == SensorType::VELODYNE || sensor == SensorType::LIVOX)
+        if (sensor == SensorType::VELODYNE)
         {
             pcl::moveFromROSMsg(currentCloudMsg, *laserCloudIn);
         }
@@ -275,7 +307,30 @@ public:
                 dst.ring = src.ring;
                 dst.time = src.timestamp - start_stamptime;
             }
-        } 
+        }
+        else if (sensor == SensorType::LIVOX)
+        {
+            pcl::PointCloud<LivoxPoint>::Ptr cloudIn(new pcl::PointCloud<LivoxPoint>());
+            pcl::fromROSMsg(currentCloudMsg, *cloudIn);
+
+            // NaN 포인트 제거
+            std::vector<int> indices;
+            pcl::removeNaNFromPointCloud(*cloudIn, *cloudIn, indices);
+
+            laserCloudIn->points.resize(cloudIn->size());
+            laserCloudIn->is_dense = cloudIn->is_dense;
+            for (size_t i = 0; i < cloudIn->size(); i++)
+            {
+                auto &src = cloudIn->points[i];
+                auto &dst = laserCloudIn->points[i];
+                dst.x = src.x;
+                dst.y = src.y;
+                dst.z = src.z;
+                dst.intensity = src.intensity;
+                dst.time = src.offset_time * 1e-9f; // 나노초를 초로 변환
+                dst.ring = 0; // Livox는 ring 정보가 없으므로 0으로 설정
+            }
+        }
         else {
             RCLCPP_ERROR_STREAM(get_logger(), "Unknown sensor type: " << int(sensor));
             rclcpp::shutdown();
@@ -308,25 +363,47 @@ public:
             }
             if (ringFlag == -1)
             {
-                RCLCPP_ERROR_STREAM(get_logger(), "Point cloud ring channel not available, please configure your point cloud data!");
-                rclcpp::shutdown();
+                if (sensor == SensorType::LIVOX)
+                {
+                    RCLCPP_WARN(get_logger(), "Livox LiDAR does not provide ring channel. Using alternative method.");
+                    ringFlag = 1;  // Livox의 경우 ring 채널이 없어도 진행
+                }
+                else
+                {
+                    RCLCPP_ERROR_STREAM(get_logger(), "Point cloud ring channel not available, please configure your point cloud data!");
+                    rclcpp::shutdown();
+                }
             }
         }
 
-        // check point time
+            // check point time
         if (deskewFlag == 0)
         {
             deskewFlag = -1;
             for (auto &field : currentCloudMsg.fields)
             {
-                if (field.name == "time" || field.name == "t")
+                if (field.name == "time" || field.name == "t" || field.name == "timestamp")
                 {
                     deskewFlag = 1;
                     break;
                 }
             }
             if (deskewFlag == -1)
-                RCLCPP_WARN(get_logger(), "Point cloud timestamp not available, deskew function disabled, system will drift significantly!");
+                RCLCPP_WARN(get_logger(), "Point cloud timestamp not found in standard fields. Checking custom Livox fields.");
+        }
+
+        // Livox 특정 timestamp 처리
+        if (deskewFlag == -1)
+        {
+            for (auto &field : currentCloudMsg.fields)
+            {
+                if (field.name == "offset_time")
+                {
+                    deskewFlag = 1;
+                    RCLCPP_INFO(get_logger(), "Using Livox offset_time for deskewing.");
+                    break;
+                }
+            }
         }
 
         return true;
@@ -585,13 +662,18 @@ public:
             if (range < lidarMinRange || range > lidarMaxRange)
                 continue;
 
-            int rowIdn = laserCloudIn->points[i].ring;
+            int rowIdn = 0;  // Livox의 경우 모든 포인트의 rowIdn을 0으로 설정
+            if (sensor != SensorType::LIVOX)
+            {
+                rowIdn = laserCloudIn->points[i].ring;
+            }
+
             if (rowIdn < 0 || rowIdn >= N_SCAN)
                 continue;
 
             if (rowIdn % downsampleRate != 0)
                 continue;
-
+    
             if (i % point_filter_num != 0)
                 continue;
 
@@ -599,8 +681,8 @@ public:
 
             fullCloud->push_back(thisPoint);
         }
-    }
-    
+    }    
+
     void publishClouds()
     {
         cloudInfo.header = cloudHeader;
@@ -628,5 +710,5 @@ int main(int argc, char** argv)
 
     rclcpp::shutdown();
     return 0;
-
 }
+

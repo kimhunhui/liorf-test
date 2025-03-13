@@ -58,6 +58,25 @@
 #include <thread>
 #include <mutex>
 
+struct LivoxPoint {
+    PCL_ADD_POINT4D
+    float intensity;
+    uint8_t tag;
+    uint8_t line;
+    uint32_t offset_time;
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+} EIGEN_ALIGN16;
+
+POINT_CLOUD_REGISTER_POINT_STRUCT(LivoxPoint,
+    (float, x, x)
+    (float, y, y)
+    (float, z, z)
+    (float, intensity, intensity)
+    (uint8_t, tag, tag)
+    (uint8_t, line, line)
+    (uint32_t, offset_time, offset_time)
+)
+
 using namespace std;
 
 typedef pcl::PointXYZI PointType;

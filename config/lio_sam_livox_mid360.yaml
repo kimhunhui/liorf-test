@@ -5,8 +5,8 @@
     livox_time_field: "offset_time"
     
     # Topics
-    pointCloudTopic: "/livox/lidar_PointCloud2" #"points_raw"               # Point cloud data
-    imuTopic: "/imu" #"imu_raw"                         # IMU data
+    pointCloudTopic: "/livox/lidar" #"points_raw"               # Point cloud data
+    imuTopic: "/livox/imu" #"imu_raw"                         # IMU data
     odomTopic: "/odom" #"/liorf/mapping/odometry"                   # IMU pre-preintegration odometry, same frequency as IMU
     gpsTopic: "/gps"                   # GPS odometry topic from navsat, see module_navsat.launch file
 

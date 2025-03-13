@@ -293,8 +293,8 @@ public:
         nav_msgs::msg::Odometry gps_odom;
         gps_odom.header = gpsMsg->header;
         gps_odom.header.frame_id = "map";
-        gps_odom.pose.pose.position.x = trans_local_[0]; //gps odom _ publish 방향 
-        gps_odom.pose.pose.position.y = trans_local_[1];
+        gps_odom.pose.pose.position.x = -trans_local_[0]; //gps odom _ publish 방향 
+        gps_odom.pose.pose.position.y = -trans_local_[1];
         gps_odom.pose.pose.position.z = trans_local_[2];
         tf2::Quaternion quat_tf;
         quat_tf.setRPY(0.0, 0.0, 0.0);
@@ -1692,7 +1692,7 @@ public:
         tf2::Stamped<tf2::Transform> temp_odom_to_lidar(t_odom_to_lidar, time_point, odometryFrame);
         geometry_msgs::msg::TransformStamped trans_odom_to_lidar;
         tf2::convert(temp_odom_to_lidar, trans_odom_to_lidar);
-        trans_odom_to_lidar.child_frame_id = "base_link";
+        trans_odom_to_lidar.child_frame_id = "livox_frame";
         br->sendTransform(trans_odom_to_lidar);
 
         // Publish odometry for ROS (incremental)

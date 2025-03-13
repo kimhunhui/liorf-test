@@ -26,12 +26,13 @@ find_package(tf2_eigen REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(PCL REQUIRED)
+find_package(pcl_ros REQUIRED)  # 추가된 부분
 find_package(GTSAM REQUIRED)
 find_package(Eigen REQUIRED)
 find_package(OpenMP REQUIRED)
 find_package(Boost REQUIRED COMPONENTS timer)
 
-set(ros2_lib "rclcpp;rclpy;std_msgs;sensor_msgs;geometry_msgs;nav_msgs;cv_bridge;pcl_msgs;pcl_conversions;visualization_msgs;tf2;tf2_ros;tf2_eigen;tf2_sensor_msgs;tf2_geometry_msgs")
+set(ros2_lib "rclcpp;rclpy;std_msgs;sensor_msgs;geometry_msgs;nav_msgs;cv_bridge;pcl_msgs;pcl_conversions;visualization_msgs;tf2;tf2_ros;tf2_eigen;tf2_sensor_msgs;tf2_geometry_msgs;pcl_ros")  # pcl_ros 추가
 
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "/usr/share/cmake/geographiclib/")
 find_package(GeographicLib REQUIRED)
@@ -46,17 +47,18 @@ rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} rosidl_type
 # include directories
 include_directories(
   lib
-	include
-	${PCL_INCLUDE_DIRS}
+  include
+  ${PCL_INCLUDE_DIRS}
   ${OpenCV_INCLUDE_DIRS}
-	${GTSAM_INCLUDE_DIR}
+  ${GTSAM_INCLUDE_DIR}
+  ${pcl_ros_INCLUDE_DIRS}  # 추가된 부분
 )
 
 # link directories
 link_directories(
   lib
-	include
-	${PCL_LIBRARY_DIRS}
+  include
+  ${PCL_LIBRARY_DIRS}
   ${OpenCV_LIBRARY_DIRS}
   ${GTSAM_LIBRARY_DIRS}
 )
@@ -90,9 +92,9 @@ install(
 
 install(
   TARGETS 
-	${PROJECT_NAME}_imageProjection
-	${PROJECT_NAME}_imuPreintegration
-	${PROJECT_NAME}_mapOptmization
+  ${PROJECT_NAME}_imageProjection
+  ${PROJECT_NAME}_imuPreintegration
+  ${PROJECT_NAME}_mapOptmization
   DESTINATION lib/${PROJECT_NAME}
 )
 

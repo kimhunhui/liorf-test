@@ -244,7 +244,9 @@ public:
         // extract info and feature cloud
         cloudInfo = *msgIn;
         pcl::fromROSMsg(msgIn->cloud_deskewed, *laserCloudSurfLast);
-
+        for (auto &point : laserCloudSurfLast->points) {
+            point.z = 0.0; // 포인트 클라우드의 z값을 바닥에 맞춤
+        }
         // TODO
         // ......
         // remapping
@@ -909,17 +911,14 @@ public:
         incrementalOdometryAffineFront = trans2Affine3f(transformTobeMapped);
 
         static Eigen::Affine3f lastImuTransformation;
-        // initialization
         if (cloudKeyPoses3D->points.empty())
         {
             transformTobeMapped[0] = cloudInfo.imurollinit;
             transformTobeMapped[1] = cloudInfo.imupitchinit;
             transformTobeMapped[2] = cloudInfo.imuyawinit;
-
-            if (!useImuHeadingInitialization)
-                transformTobeMapped[2] = 0;
-
-            lastImuTransformation = pcl::getTransformation(0, 0, 0, cloudInfo.imurollinit, cloudInfo.imupitchinit, cloudInfo.imuyawinit); // save imu before return;
+            transformTobeMapped[3] = 0.0;
+            transformTobeMapped[4] = 0.0;
+            transformTobeMapped[5] = 0.0; // z축 초기화를 0으로 설정
             return;
         }
 
@@ -1669,15 +1668,14 @@ public:
 
     void publishOdometry()
     {
-        // Publish odometry for ROS (global)
         nav_msgs::msg::Odometry laserOdometryROS;
         laserOdometryROS.header.stamp = timeLaserInfoStamp;
-        laserOdometryROS.header.frame_id = odometryFrame;
-        laserOdometryROS.child_frame_id = "odom_mapping";
+        laserOdometryROS.header.frame_id = "odom";
+        laserOdometryROS.child_frame_id = "base_link";
         laserOdometryROS.pose.pose.position.x = transformTobeMapped[3];
         laserOdometryROS.pose.pose.position.y = transformTobeMapped[4];
-        laserOdometryROS.pose.pose.position.z = transformTobeMapped[5];
-        // Ref: http://wiki.ros.org/tf2/Tutorials/Migration/DataConversions
+        laserOdometryROS.pose.pose.position.z = 0.0;  // z축을 0으로 설정하여 바닥에 붙이기
+
         tf2::Quaternion quat_tf;
         quat_tf.setRPY(transformTobeMapped[0], transformTobeMapped[1], transformTobeMapped[2]);
         geometry_msgs::msg::Quaternion quat_msg;
@@ -1685,15 +1683,17 @@ public:
         laserOdometryROS.pose.pose.orientation = quat_msg;
         pubLaserOdometryGlobal->publish(laserOdometryROS);
         
-        // Publish TF
-        quat_tf.setRPY(transformTobeMapped[0], transformTobeMapped[1], transformTobeMapped[2]);
-        tf2::Transform t_odom_to_lidar = tf2::Transform(quat_tf, tf2::Vector3(transformTobeMapped[3], transformTobeMapped[4], transformTobeMapped[5]));
-        tf2::TimePoint time_point = tf2_ros::fromRclcpp(timeLaserInfoStamp);
-        tf2::Stamped<tf2::Transform> temp_odom_to_lidar(t_odom_to_lidar, time_point, odometryFrame);
-        geometry_msgs::msg::TransformStamped trans_odom_to_lidar;
-        tf2::convert(temp_odom_to_lidar, trans_odom_to_lidar);
-        trans_odom_to_lidar.child_frame_id = "base_link";
-        br->sendTransform(trans_odom_to_lidar);
+        // TF 변환 발행
+        tf2::Transform t_odom_to_base;
+        t_odom_to_base.setOrigin(tf2::Vector3(transformTobeMapped[3], transformTobeMapped[4], 0.0));  // z = 0으로 설정
+        t_odom_to_base.setRotation(quat_tf);
+
+        geometry_msgs::msg::TransformStamped odom_tf;
+        odom_tf.header.stamp = timeLaserInfoStamp;
+        odom_tf.header.frame_id = "odom";
+        odom_tf.child_frame_id = "base_link";
+        tf2::convert(t_odom_to_base, odom_tf.transform);
+        br->sendTransform(odom_tf);
 
         // Publish odometry for ROS (incremental)
         static bool lastIncreOdomPubFlag = false;

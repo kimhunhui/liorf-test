@@ -5,27 +5,20 @@
     livox_time_field: "offset_time"
     
     # Topics
-    pointCloudTopic: "/livox/lidar_PointCloud2" #"points_raw"               # Point cloud data
-    imuTopic: "/imu" #"imu_raw"                         # IMU data
-    odomTopic: "/odom" #"/liorf/mapping/odometry"                   # IMU pre-preintegration odometry, same frequency as IMU
-    gpsTopic: "/gps"                   # GPS odometry topic from navsat, see module_navsat.launch file
+    pointCloudTopic: "/livox/lidar" #"points_raw"               # Point cloud data
+    imuTopic: "/livox/imu" #"imu_raw"                         # IMU data
+    odomTopic: "odometry/imu"                   # IMU pre-preintegration odometry, same frequency as IMU
+    gpsTopic: "odometry/gpsz"                   # GPS odometry topic from navsat, see module_navsat.launch file
 
     # Frames
-    lidarFrame: "livox_frame"
+    lidarFrame: "base_link"
     baselinkFrame: "base_link"
     odometryFrame: "odom"
     mapFrame: "map"
 
-    # gps_frame: "gps_link"
-    # gps_to_baselink_transform:
-    #   translation: [0.0, 0.0, 0.0]
-    #   rotation: [1.0, 0.0, 0.0,
-    #             0.0, -1.0, 0.0,  # GPS 데이터가 뒤집혔다면 수정
-    #             0.0, 0.0, -1.0]
-
     # GPS Settings
     useImuHeadingInitialization: true           # if using GPS data, set to "true"
-    useGpsElevation: true                      # if GPS elevation is bad, set to "false"
+    useGpsElevation: false                      # if GPS elevation is bad, set to "false"
     gpsCovThreshold: 2.0                        # m^2, threshold for using GPS data
     poseCovThreshold: 25.0                      # m^2, threshold for using GPS data
     
@@ -35,8 +28,8 @@
 
     # Sensor Settings
     sensor: livox                            # lidar sensor type, 'velodyne' or 'ouster' or 'livox' or 'robosense'
-    N_SCAN: 6                                  # number of lidar channel (i.e., Velodyne/Ouster: 16, 32, 64, 128, Livox Horizon: 6)
-    Horizon_SCAN: 4000                          # lidar horizontal resolution (Velodyne:1800, Ouster:512,1024,2048, Livox Horizon: 4000)
+    N_SCAN: 1                                  # number of lidar channel (i.e., Velodyne/Ouster: 16, 32, 64, 128, Livox Horizon: 6)
+    Horizon_SCAN: 10000                          # lidar horizontal resolution (Velodyne:1800, Ouster:512,1024,2048, Livox Horizon: 4000)
     downsampleRate: 1                           # default: 1. Downsample your data if too many points(line). i.e., 16 = 64 / 4, 16 = 16 / 1
     point_filter_num: 3                         # default: 3. Downsample your data if too many points(point). e.g., 16: 1, 32: 5, 64: 8
     lidarMinRange: 0.5                          # default: 1.0, minimum lidar range to be used
@@ -65,28 +58,20 @@
 
     # Extrinsics: T_lb (lidar -> imu)
     extrinsicTrans: [0.0, 0.0, 0.0]
-    extrinsicRot: [1.0,  0.0,  0.0,
-                  0.0,  1.0,  0.0,
-                  0.0,  0.0,  1.0]
+    extrinsicRot: [-1.0, 0.0, 0.0,
+                    0.0, 1.0, 0.0,
+                    0.0, 0.0, -1.0]
 
     # This parameter is set only when the 9-axis IMU is used, but it must be a high-precision IMU. e.g. MTI-680
-    extrinsicRPY: [1.0,  0.0,  0.0,
-                  0.0,  1.0,  0.0,
-                  0.0,  0.0,  1.0]
-
-    # LOAM feature threshold
-    edgeThreshold: 1.0
-    surfThreshold: 0.1
-    edgeFeatureMinValidNum: 10
-    surfFeatureMinValidNum: 100
+    extrinsicRPY: [0.0, -1.0, 0.0,
+                    1.0, 0.0, 0.0,
+                    0.0, 0.0, 1.0]
 
     # voxel filter paprams
-    odometrySurfLeafSize: 0.4                     # default: 0.4 - outdoor, 0.2 - indoor
-    mappingCornerLeafSize: 0.2                    # default: 0.2 - outdoor, 0.1 - indoor
-    mappingSurfLeafSize: 0.4     #0.1                 # default: 0.4 - outdoor, 0.2 - indoor
+    mappingSurfLeafSize: 0.1                      # default: 0.4 - outdoor, 0.2 - indoor
 
     # robot motion constraint (in case you are using a 2D robot)
-    z_tollerance: 3.0                            # meters 0.5
+    z_tollerance: 0.5                            # meters
     rotation_tollerance: 0.5                     # radians
 
     # CPU Params
